@@ -1,8 +1,9 @@
 # src/config.py
 """Configuration for the anomaly detection system."""
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, asdict
+from typing import Optional, Dict, Any
+import json
 
 @dataclass
 class ModelConfig:
@@ -31,6 +32,25 @@ class ModelConfig:
         if self.hidden_dims is None:
             self.hidden_dims = [128, 128, 128, 128]
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert config to dictionary."""
+        return asdict(self)
+    
+    def to_json(self) -> str:
+        """Convert config to JSON string."""
+        return json.dumps(self.to_dict())
+    
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> 'ModelConfig':
+        """Create config from dictionary."""
+        return cls(**config_dict)
+    
+    @classmethod
+    def from_json(cls, json_str: str) -> 'ModelConfig':
+        """Create config from JSON string."""
+        config_dict = json.loads(json_str)
+        return cls.from_dict(config_dict)
+
 @dataclass
 class TrainingConfig:
     """Training configuration parameters."""
@@ -41,3 +61,11 @@ class TrainingConfig:
     result_file: str = "result.csv"
     max_fpr: float = 0.1
     decision_threshold: float = 0.9
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert config to dictionary."""
+        return asdict(self)
+    
+    def to_json(self) -> str:
+        """Convert config to JSON string."""
+        return json.dumps(self.to_dict())

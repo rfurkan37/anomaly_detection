@@ -3,7 +3,8 @@
 
 import tensorflow as tf
 from tensorflow import keras
-from keras import Sequential
+import json
+import os
 from .config import ModelConfig
 
 class AnomalyDetector(tf.keras.Model):
@@ -86,33 +87,37 @@ class AnomalyDetector(tf.keras.Model):
             optimizer=tf.keras.optimizers.Adam(learning_rate),
             loss='mse'  # DCASE uses mean_squared_error
         )
-        
-    def get_config(self):
-        """Provide configuration for model serialization."""
-        config = super().get_config()
-        config.update({
-            'input_dim': self.input_dim,
-            'config': self.config
-        })
-        return config
-    
-    @classmethod
-    def from_config(cls, config):
-        """Reconstruct the model from its configuration."""
-        # Extract required arguments
-        input_dim = config.pop('input_dim', None)
-        model_config = config.pop('config', None)
-        
-        # Remove any TensorFlow-specific config items
-        config.pop('trainable', None)
-        config.pop('dtype', None)
-        config.pop('name', None)
-        
-        # Create new instance
-        return cls(input_dim=input_dim, config=model_config, **config)
     
     def save(self, filepath, **kwargs):
-        """Save the model."""
-        # Remove custom_objects from kwargs if present
-        kwargs.pop('custom_objects', None)
+        """Save the model and its configuration."""
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        # Save the model weights and architecture
         super().save(filepath, **kwargs)
+        
+        # Save the configuration separately
+        config_path = os.path.join(os.path.dirname(filepath), 'model_config.json')
+        with open(config_path, 'w') as f:
+            json.dump(self.config.to_dict(), f)
+    
+    @classmethod
+    def load(cls, filepath):
+        """Load the model and its configuration."""
+        # Load configuration
+        config_path = os.path.join(os.path.dirname(filepath), 'model_config.json')
+        with open(config_path, 'r') as f:
+            config_dict = json.load(f)
+        
+        # Create config object
+        config = ModelConfig.from_dict(config_dict)
+        
+        # Load base model
+        model = tf.keras.models.load_model(filepath, compile=False)
+        
+        # Create new instance with loaded config
+        input_dim = model.input_shape[-1]
+        new_model = cls(input_dim=input_dim, config=config)
+        new_model.set_weights(model.get_weights())
+        
+        return new_model

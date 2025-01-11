@@ -187,8 +187,8 @@ class Trainer:
         
         os.makedirs(path, exist_ok=True)
         
-        # Save model with .h5 extension
-        model_path = os.path.join(path, 'model.h5')
+        # Save model
+        model_path = os.path.join(path, 'model.keras')  # Using .keras extension as recommended
         self.model.save(model_path)
         
         # Save threshold and distribution
@@ -203,8 +203,8 @@ class Trainer:
         """Load a saved model and configuration."""
         trainer = cls(model_config, training_config)
         
-        # Load model with .h5 extension
-        model_path = os.path.join(path, 'model.h5')
+        # Load model
+        model_path = os.path.join(path, 'model.keras')
         trainer.model = AnomalyDetector.load(model_path)
         
         # Load threshold and distribution
