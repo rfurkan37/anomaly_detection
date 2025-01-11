@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Main script for training anomaly detection models."""
+"""Main script for training anomaly detection models with pre-training validation."""
 
 import os
+import sys
 import argparse
 import logging
+import numpy as np
+import tensorflow as tf
+from pathlib import Path
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 
@@ -11,169 +15,166 @@ from src.config import ModelConfig, TrainingConfig
 from src.train import Trainer
 from src.utils import setup_logging, get_file_paths, save_results
 
-@dataclass
-class TrainingPaths:
-    """Container for training-related paths."""
-    train_dir: str
-    test_dir: str
-    model_save_dir: str
-    results_dir: str
-
-    def create_directories(self):
-        """Create necessary directories if they don't exist."""
-        os.makedirs(self.model_save_dir, exist_ok=True)
-        os.makedirs(self.results_dir, exist_ok=True)
-
-class TrainingManager:
-    """Manager class for training process."""
+class SystemChecker:
+    """System and environment checker for model training."""
     
-    def __init__(self, 
-                 model_config: ModelConfig,
-                 training_config: TrainingConfig,
-                 machine_type: str,
-                 mode: str):
-        self.model_config = model_config
-        self.training_config = training_config
-        self.machine_type = machine_type
-        self.mode = mode
-        self.trainer = None
-        self.logger = logging.getLogger(__name__)
-        
-    def setup_paths(self) -> TrainingPaths:
-        """Setup necessary paths for training."""
-        # Determine base directory based on mode
-        base_dir = (self.training_config.dev_directory 
-                   if self.mode == 'dev' 
-                   else self.training_config.eval_directory)
-        
-        # Create path structure
-        paths = TrainingPaths(
-            train_dir=os.path.join(base_dir, self.machine_type, 'train'),
-            test_dir=os.path.join(base_dir, self.machine_type, 'test'),
-            model_save_dir=os.path.join(self.training_config.model_directory, 
-                                      self.machine_type),
-            results_dir=self.training_config.result_directory
-        )
-        
-        # Ensure directories exist
-        paths.create_directories()
-        
-        # Log paths for debugging
-        self.logger.info(f"Train directory: {paths.train_dir}")
-        self.logger.info(f"Test directory: {paths.test_dir}")
-        self.logger.info(f"Model save directory: {paths.model_save_dir}")
-        self.logger.info(f"Results directory: {paths.results_dir}")
-        
-        return paths
-    
-    def get_training_files(self, paths: TrainingPaths) -> Tuple[List[str], List[str]]:
-        """Get training and test files."""
+    @staticmethod
+    def check_gpu():
+        """Check GPU availability and configuration."""
         try:
-            # Get training files (normal only)
-            all_train_files = get_file_paths(paths.train_dir)
-            train_files = [f for f in all_train_files if 'normal' in f]
+            gpus = tf.config.list_physical_devices('GPU')
+            if not gpus:
+                logging.warning("No GPU found. Training will be slow on CPU.")
+                return False
             
-            if not train_files:
-                raise ValueError(f"No normal training files found in {paths.train_dir}")
+            # Check GPU memory
+            gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
+            free_memory_mb = gpu_memory['free'] / (1024 * 1024)
+            if free_memory_mb < 2000:  # Less than 2GB free
+                logging.warning(f"Low GPU memory: {free_memory_mb:.2f}MB free")
             
-            # Get test files
-            test_files = get_file_paths(paths.test_dir)
-            
-            self.logger.info(f"Found {len(train_files)} training files")
-            self.logger.info(f"Found {len(test_files)} test files")
-            
-            return train_files, test_files
+            logging.info(f"Found {len(gpus)} GPU(s)")
+            for gpu in gpus:
+                logging.info(f"GPU Device: {gpu.device_type} - {gpu.name}")
+            return True
             
         except Exception as e:
-            self.logger.error(f"Error getting files: {str(e)}")
-            raise
-    
-    def get_test_labels(self, test_files: List[str]) -> Optional[List[int]]:
-        """Generate labels for test files."""
-        if self.mode != 'dev':
-            return None
-            
-        return [1 if 'anomaly' in f else 0 for f in test_files]
-    
-    def train_model(self, train_files: List[str]) -> None:
-        """Train the anomaly detection model."""
-        self.logger.info("Initializing trainer...")
-        self.trainer = Trainer(self.model_config, self.training_config)
-        
-        self.logger.info("Starting training...")
-        history = self.trainer.train(train_files)
-        
-        # Log training summary
-        final_loss = history['loss'][-1]
-        final_val_loss = history.get('val_loss', [0])[-1]
-        self.logger.info(f"Training completed - Final loss: {final_loss:.4f}, "
-                        f"Val loss: {final_val_loss:.4f}")
-    
-    def evaluate_model(self, 
-                      test_files: List[str], 
-                      test_labels: Optional[List[int]]) -> Optional[dict]:
-        """Evaluate the trained model."""
-        if not test_labels:
-            return None
-            
-        self.logger.info("Evaluating model...")
-        results = self.trainer.evaluate(test_files, test_labels)
-        
-        # Log metrics
-        metrics = {k: v for k, v in results.items() 
-                  if k not in ['anomaly_scores', 'predictions']}
-        for metric, value in metrics.items():
-            self.logger.info(f"{metric}: {value:.4f}")
-            
-        return results
-    
-    def save_model(self, paths: TrainingPaths) -> None:
-        """Save the trained model and results."""
-        self.logger.info(f"Saving model to {paths.model_save_dir}")
-        self.trainer.save(paths.model_save_dir)
-    
-    def save_results(self, 
-                    results: Optional[dict], 
-                    paths: TrainingPaths) -> None:
-        """Save evaluation results."""
-        if not results:
-            return
-            
-        results_path = os.path.join(
-            paths.results_dir,
-            f"{self.machine_type}_results.txt"
-        )
-        save_results(results, results_path)
-        self.logger.info(f"Results saved to {results_path}")
+            logging.error(f"Error checking GPU: {str(e)}")
+            return False
 
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description='Train anomaly detection model'
-    )
-    parser.add_argument(
-        '--mode',
-        choices=['dev', 'eval'],
-        required=True,
-        help='Development or evaluation mode'
-    )
-    parser.add_argument(
-        '--machine-type',
-        type=str,
-        required=True,
-        help='Type of machine to process'
-    )
-    parser.add_argument(
-        '--config',
-        type=str,
-        help='Path to custom configuration file'
-    )
-    return parser.parse_args()
+    @staticmethod
+    def check_tensorflow():
+        """Verify TensorFlow installation and configuration."""
+        logging.info(f"TensorFlow version: {tf.__version__}")
+        
+        # Check if TF can access GPU
+        if tf.test.is_built_with_cuda():
+            logging.info("TensorFlow is built with CUDA")
+        else:
+            logging.warning("TensorFlow is not built with CUDA")
+
+    @staticmethod
+    def check_directory_structure(config: TrainingConfig, machine_type: str, mode: str) -> bool:
+        """Verify required directory structure exists."""
+        base_dir = config.dev_directory if mode == 'dev' else config.eval_directory
+        required_dirs = [
+            Path(base_dir) / machine_type / 'train',
+            Path(base_dir) / machine_type / 'test',
+            Path(config.model_directory),
+            Path(config.result_directory)
+        ]
+        
+        missing_dirs = []
+        for dir_path in required_dirs:
+            if not dir_path.exists():
+                missing_dirs.append(dir_path)
+                
+        if missing_dirs:
+            logging.error("Missing required directories:")
+            for dir_path in missing_dirs:
+                logging.error(f"  - {dir_path}")
+            return False
+            
+        return True
+
+    @staticmethod
+    def check_data_files(train_dir: str, test_dir: str) -> Tuple[bool, Optional[str]]:
+        """Verify data files exist and are valid."""
+        try:
+            train_files = get_file_paths(train_dir, pattern="*.wav")
+            test_files = get_file_paths(test_dir, pattern="*.wav")
+            
+            if not train_files:
+                return False, "No training files found"
+            if not test_files:
+                return False, "No test files found"
+                
+            # Check file sizes
+            small_files = []
+            for file_path in train_files + test_files:
+                if os.path.getsize(file_path) < 1024:  # Less than 1KB
+                    small_files.append(file_path)
+            
+            if small_files:
+                logging.warning("Found suspiciously small files:")
+                for file_path in small_files[:5]:  # Show first 5
+                    logging.warning(f"  - {file_path}")
+                    
+            # Check for balanced data in training set
+            normal_count = sum(1 for f in train_files if 'normal' in f.lower())
+            anomaly_count = sum(1 for f in train_files if 'anomaly' in f.lower())
+            
+            logging.info(f"Training data distribution:")
+            logging.info(f"  - Normal samples: {normal_count}")
+            logging.info(f"  - Anomaly samples: {anomaly_count}")
+            
+            return True, None
+            
+        except Exception as e:
+            return False, str(e)
+
+    @staticmethod
+    def check_model_config(config: ModelConfig) -> bool:
+        """Validate model configuration."""
+        try:
+            # Check basic parameter ranges
+            if config.n_mels <= 0 or config.n_frames <= 0:
+                logging.error("Invalid feature extraction parameters")
+                return False
+                
+            # Check memory requirements
+            approx_memory_mb = (
+                config.batch_size * 
+                config.n_mels * 
+                config.n_frames * 
+                4  # 4 bytes per float32
+            ) / (1024 * 1024)  # Convert to MB
+            
+            if approx_memory_mb > 1024:  # More than 1GB per batch
+                logging.warning(f"High memory usage per batch: {approx_memory_mb:.2f}MB")
+                
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error validating config: {str(e)}")
+            return False
+
+def run_system_checks(config: TrainingConfig, model_config: ModelConfig, 
+                     machine_type: str, mode: str) -> bool:
+    """Run all system checks before training."""
+    checker = SystemChecker()
+    
+    # Check system and TensorFlow
+    checker.check_tensorflow()
+    has_gpu = checker.check_gpu()
+    
+    if not has_gpu:
+        response = input("No GPU found. Continue anyway? (y/n): ")
+        if response.lower() != 'y':
+            return False
+    
+    # Check directories and data
+    if not checker.check_directory_structure(config, machine_type, mode):
+        return False
+        
+    base_dir = config.dev_directory if mode == 'dev' else config.eval_directory
+    train_dir = os.path.join(base_dir, machine_type, 'train')
+    test_dir = os.path.join(base_dir, machine_type, 'test')
+    
+    data_valid, error_msg = checker.check_data_files(train_dir, test_dir)
+    if not data_valid:
+        logging.error(f"Data validation failed: {error_msg}")
+        return False
+    
+    # Check configuration
+    if not checker.check_model_config(model_config):
+        return False
+    
+    logging.info("All system checks passed successfully!")
+    return True
 
 def main():
-    """Main execution function."""
-
-    # Setup
+    """Main execution function with pre-training validation."""
     setup_logging()
     logger = logging.getLogger(__name__)
     args = parse_args()
@@ -183,6 +184,11 @@ def main():
     # Load configurations
     model_config = ModelConfig()
     training_config = TrainingConfig()
+    
+    # Run system checks
+    if not run_system_checks(training_config, model_config, args.machine_type, args.mode):
+        logger.error("System checks failed. Aborting training.")
+        sys.exit(1)
     
     try:
         # Initialize training manager
@@ -197,18 +203,12 @@ def main():
         paths = manager.setup_paths()
         
         # Get files
-        train_files, test_files = manager.get_training_files(paths)
-        test_labels = manager.get_test_labels(test_files)
+        train_files = get_file_paths(paths.train_dir, pattern='*.wav')
+        test_files = get_file_paths(paths.test_dir, pattern='*.wav')
+        logger.info(f"Found {len(train_files)} training files and {len(test_files)} test files")
         
         # Train model
         manager.train_model(train_files)
-        
-        # Evaluate if in dev mode
-        results = manager.evaluate_model(test_files, test_labels)
-        
-        # Save model and results
-        manager.save_model(paths)
-        manager.save_results(results, paths)
         
         logger.info("Training completed successfully")
         

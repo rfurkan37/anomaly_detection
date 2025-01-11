@@ -54,7 +54,7 @@ class Trainer:
         
         # Get input dimension from a sample file
         sample_features = self.feature_extractor.extract_features(train_files[0])
-        input_dim = sample_features.shape[-1]  # Get the feature dimension
+        input_dim = sample_features.shape[-1]
         
         # Create and compile model
         self.model = AnomalyDetector(input_dim, self.model_config)
@@ -66,7 +66,7 @@ class Trainer:
             self.model_config.validation_split
         )
         
-        # Create datasets
+        # Create datasets with optimized settings
         train_dataset = create_dataset(
             train_split,
             self.feature_extractor,
@@ -78,47 +78,46 @@ class Trainer:
             self.model_config.batch_size
         )
         
-        # Setup callbacks
+        # Mixed precision for faster training
+        mixed_precision.set_global_policy('mixed_float16')
+        
+        # Optimize callback settings
         callbacks = [
             tf.keras.callbacks.EarlyStopping(
                 monitor='val_loss',
-                patience=10,
-                restore_best_weights=True
+                patience=5,  # Reduced patience
+                restore_best_weights=True,
+                min_delta=1e-4  # Minimum improvement required
             ),
             tf.keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
-                patience=5
+                patience=3,  # Reduced patience
+                min_delta=1e-4,
+                cooldown=1
             ),
             # Add TensorBoard callback
             tf.keras.callbacks.TensorBoard(
                 log_dir='./logs',
-                histogram_freq=1
+                histogram_freq=1,
+                update_freq='epoch'
             )
         ]
         
-        # Train model
-        logger.info("Starting training...")
+        # Train with optimized settings
         history = self.model.fit(
             train_dataset,
             validation_data=val_dataset,
             epochs=self.model_config.epochs,
             callbacks=callbacks,
-            verbose=1
+            verbose=1,
+            workers=4,
+            use_multiprocessing=True
         )
         
-        # Calculate threshold
+        # Calculate threshold efficiently
         logger.info("Calculating anomaly threshold...")
-        all_features = []
-        for file in tqdm(train_files, desc="Processing files for threshold"):
-            features = self.feature_extractor.extract_features(file)
-            all_features.append(features)
-        
-        all_features = np.vstack(all_features)
-        scores = calculate_anomaly_scores(self.model, all_features)
-        
-        self.score_distribution = fit_score_distribution(scores)
-        self.threshold = calculate_threshold(self.score_distribution)
+        self.calculate_threshold(train_files)
         
         return history.history
     

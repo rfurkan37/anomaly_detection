@@ -9,6 +9,7 @@ import tensorflow as tf
 import numpy as np
 from scipy import stats
 from sklearn import metrics
+from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,15 @@ def get_file_paths(directory: str, pattern: str = "*.wav") -> List[str]:
     return files
 
 def create_dataset(file_paths: List[str], feature_extractor, batch_size: int) -> tf.data.Dataset:
-    """Create a TensorFlow dataset from audio files."""
+    """Create an optimized TensorFlow dataset."""
     
     def load_and_preprocess(file_path: str) -> Tuple[tf.Tensor, tf.Tensor]:
-        """Load and preprocess a single file."""
+        """Optimized load and preprocess function."""
         try:
             # Extract features
             features = feature_extractor.extract_features(file_path.numpy().decode())
-            # Convert to tensor
-            features = tf.convert_to_tensor(features, dtype=tf.float32)
+            # Convert to tensor with explicit type
+            features = tf.cast(features, tf.float16)  # Use float16 for mixed precision
             return features, features
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {str(e)}")
@@ -57,27 +58,28 @@ def create_dataset(file_paths: List[str], feature_extractor, batch_size: int) ->
     # Create dataset from file paths
     dataset = tf.data.Dataset.from_tensor_slices(file_paths)
     
-    # Load and preprocess files
+    # Optimize loading and preprocessing
     dataset = dataset.map(
         lambda x: tf.py_function(
             load_and_preprocess,
             [x],
-            [tf.float32, tf.float32]
+            [tf.float16, tf.float16]
         ),
         num_parallel_calls=tf.data.AUTOTUNE
     )
     
     # Set shapes explicitly
+    seq_length, feature_dim = feature_extractor.get_feature_dim()
     dataset = dataset.map(
         lambda x, y: (
-            tf.ensure_shape(x, [feature_extractor.config.sequence_length, 
-                              feature_extractor.config.n_mels * feature_extractor.config.n_frames]),
-            tf.ensure_shape(y, [feature_extractor.config.sequence_length, 
-                              feature_extractor.config.n_mels * feature_extractor.config.n_frames])
+            tf.ensure_shape(x, [seq_length, feature_dim]),
+            tf.ensure_shape(y, [seq_length, feature_dim])
         )
     )
     
-    # Batch and prefetch
+    # Optimize dataset performance
+    dataset = dataset.cache()  # Cache the processed data
+    dataset = dataset.shuffle(buffer_size=min(len(file_paths), 1000))
     dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
@@ -93,11 +95,48 @@ def fit_score_distribution(scores: np.ndarray) -> Tuple[float, float, float]:
     """Fit a gamma distribution to the scores."""
     return stats.gamma.fit(scores)
 
-def calculate_threshold(distribution_params: Tuple[float, float, float],
-                       percentile: float = 90) -> float:
-    """Calculate threshold based on score distribution."""
-    shape, loc, scale = distribution_params
-    return stats.gamma.ppf(q=percentile/100, a=shape, loc=loc, scale=scale)
+def calculate_threshold(self, train_files):
+        """Calculate anomaly threshold more efficiently."""
+        logger.info("Calculating anomaly threshold...")
+        
+        # Process files in batches
+        batch_size = 32
+        all_scores = []
+        
+        for i in tqdm(range(0, len(train_files), batch_size), desc="Processing files"):
+            batch_files = train_files[i:i + batch_size]
+            batch_features = []
+            
+            # Extract features in parallel using tf.data
+            dataset = tf.data.Dataset.from_tensor_slices(batch_files)
+            dataset = dataset.map(
+                lambda x: tf.py_function(
+                    self.feature_extractor.extract_features,
+                    [x],
+                    tf.float32
+                ),
+                num_parallel_calls=tf.data.AUTOTUNE
+            )
+            dataset = dataset.prefetch(tf.data.AUTOTUNE)
+            
+            # Convert to numpy and calculate scores
+            batch_features = list(dataset.as_numpy_iterator())
+            batch_features = np.vstack(batch_features)
+            
+            # Calculate scores for batch
+            reconstructed = self.model.predict(
+                batch_features, 
+                batch_size=32,
+                verbose=0
+            )
+            scores = np.mean(np.square(batch_features - reconstructed), axis=1)
+            all_scores.extend(scores)
+        
+        all_scores = np.array(all_scores)
+        self.score_distribution = fit_score_distribution(all_scores)
+        self.threshold = calculate_threshold(self.score_distribution)
+        
+        return all_scores
 
 def evaluate_predictions(y_true: np.ndarray,
                        y_score: np.ndarray,
