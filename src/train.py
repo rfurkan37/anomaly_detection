@@ -50,9 +50,11 @@ class Trainer:
         
     def train(self, train_files: List[str]) -> Dict:
         """Train the anomaly detection model."""
-        # Get input dimension
+        logger.info("Starting model training...")
+        
+        # Get input dimension from a sample file
         sample_features = self.feature_extractor.extract_features(train_files[0])
-        input_dim = sample_features.shape[1]
+        input_dim = sample_features.shape[-1]  # Get the feature dimension
         
         # Create and compile model
         self.model = AnomalyDetector(input_dim, self.model_config)
@@ -76,7 +78,7 @@ class Trainer:
             self.model_config.batch_size
         )
         
-        # Callbacks
+        # Setup callbacks
         callbacks = [
             tf.keras.callbacks.EarlyStopping(
                 monitor='val_loss',
@@ -87,10 +89,16 @@ class Trainer:
                 monitor='val_loss',
                 factor=0.5,
                 patience=5
+            ),
+            # Add TensorBoard callback
+            tf.keras.callbacks.TensorBoard(
+                log_dir='./logs',
+                histogram_freq=1
             )
         ]
         
-        # Train
+        # Train model
+        logger.info("Starting training...")
         history = self.model.fit(
             train_dataset,
             validation_data=val_dataset,
@@ -99,14 +107,16 @@ class Trainer:
             verbose=1
         )
         
-        # Calculate score distribution using all training data
-        logger.info("Calculating score distribution...")
-        all_features = np.vstack([
-            self.feature_extractor.extract_features(f) for f in train_files
-        ])
+        # Calculate threshold
+        logger.info("Calculating anomaly threshold...")
+        all_features = []
+        for file in tqdm(train_files, desc="Processing files for threshold"):
+            features = self.feature_extractor.extract_features(file)
+            all_features.append(features)
+        
+        all_features = np.vstack(all_features)
         scores = calculate_anomaly_scores(self.model, all_features)
         
-        # Fit distribution and calculate threshold
         self.score_distribution = fit_score_distribution(scores)
         self.threshold = calculate_threshold(self.score_distribution)
         

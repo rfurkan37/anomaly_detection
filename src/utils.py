@@ -41,20 +41,27 @@ def get_file_paths(directory: str, pattern: str = "*.wav") -> List[str]:
 
 def create_dataset(file_paths: List[str], feature_extractor, batch_size: int) -> tf.data.Dataset:
     """Create a TensorFlow dataset from audio files."""
+    
     def load_and_preprocess(file_path: str) -> Tuple[tf.Tensor, tf.Tensor]:
-        # Extract features with fixed length
-        features = feature_extractor.extract_features(file_path.numpy().decode())
-        # Convert to tensor
-        features = tf.convert_to_tensor(features, dtype=tf.float32)
-        return features, features  # Input = Target for autoencoder
+        """Load and preprocess a single file."""
+        try:
+            # Extract features
+            features = feature_extractor.extract_features(file_path.numpy().decode())
+            # Convert to tensor
+            features = tf.convert_to_tensor(features, dtype=tf.float32)
+            return features, features
+        except Exception as e:
+            logger.error(f"Error processing file {file_path}: {str(e)}")
+            raise
     
-    seq_length, feature_dim = feature_extractor.get_feature_dim()
-    
+    # Create dataset from file paths
     dataset = tf.data.Dataset.from_tensor_slices(file_paths)
+    
+    # Load and preprocess files
     dataset = dataset.map(
         lambda x: tf.py_function(
-            load_and_preprocess, 
-            [x], 
+            load_and_preprocess,
+            [x],
             [tf.float32, tf.float32]
         ),
         num_parallel_calls=tf.data.AUTOTUNE
@@ -63,12 +70,18 @@ def create_dataset(file_paths: List[str], feature_extractor, batch_size: int) ->
     # Set shapes explicitly
     dataset = dataset.map(
         lambda x, y: (
-            tf.ensure_shape(x, [seq_length, feature_dim]),
-            tf.ensure_shape(y, [seq_length, feature_dim])
+            tf.ensure_shape(x, [feature_extractor.config.sequence_length, 
+                              feature_extractor.config.n_mels * feature_extractor.config.n_frames]),
+            tf.ensure_shape(y, [feature_extractor.config.sequence_length, 
+                              feature_extractor.config.n_mels * feature_extractor.config.n_frames])
         )
     )
     
-    return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    # Batch and prefetch
+    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    
+    return dataset
 
 def calculate_anomaly_scores(model: tf.keras.Model, 
                            features: np.ndarray) -> np.ndarray:
