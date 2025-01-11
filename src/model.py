@@ -151,7 +151,7 @@ class AnomalyDetector(tf.keras.Model):
             }, f, indent=2)
     
     @classmethod
-    def load_model(cls, filepath: str, custom_objects=None):
+    def load(cls, filepath: str, custom_objects=None):
         """Load the model from a saved file."""
         try:
             # Load the Keras model
