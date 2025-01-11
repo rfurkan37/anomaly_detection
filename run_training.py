@@ -17,6 +17,84 @@ from src.train import Trainer
 from src.utils import setup_logging, get_file_paths, save_results
 
 
+# New SystemChecker class definition at the top level
+class SystemChecker:
+    """System and environment checker for model training."""
+    
+    @staticmethod
+    def check_gpu():
+        """Check GPU availability and configuration."""
+        try:
+            gpus = tf.config.list_physical_devices('GPU')
+            if not gpus:
+                logging.warning("No GPU found. Training will be slow on CPU.")
+                return False
+            
+            # Configure GPU memory growth
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+                logging.info(f"Enabled memory growth for GPU: {gpu.name}")
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error checking GPU: {str(e)}")
+            return False
+
+    @staticmethod
+    def configure_gpu(memory_limit: Optional[float] = None):
+        """Configure GPU settings."""
+        if memory_limit:
+            try:
+                gpus = tf.config.list_physical_devices('GPU')
+                for gpu in gpus:
+                    tf.config.set_logical_device_configuration(
+                        gpu,
+                        [tf.config.LogicalDeviceConfiguration(
+                            memory_limit=memory_limit * 1024  # Convert GB to MB
+                        )]
+                    )
+                logging.info(f"Set GPU memory limit to {memory_limit}GB")
+            except Exception as e:
+                logging.error(f"Error setting GPU memory limit: {str(e)}")
+
+    @staticmethod
+    def check_tensorflow():
+        """Verify TensorFlow installation and configuration."""
+        logging.info(f"TensorFlow version: {tf.__version__}")
+        
+        # Check if TF can access GPU
+        if tf.test.is_built_with_cuda():
+            logging.info("TensorFlow is built with CUDA")
+        else:
+            logging.warning("TensorFlow is not built with CUDA")
+
+    @staticmethod
+    def check_data_files(train_dir: str, test_dir: str) -> Tuple[bool, Optional[str]]:
+        """Verify data files exist and are valid."""
+        try:
+            train_files = get_file_paths(train_dir, pattern="*.wav")
+            test_files = get_file_paths(test_dir, pattern="*.wav")
+            
+            if not train_files:
+                return False, "No training files found"
+            if not test_files:
+                return False, "No test files found"
+                
+            # Check for balanced data in training set
+            normal_count = sum(1 for f in train_files if 'normal' in f.lower())
+            anomaly_count = sum(1 for f in train_files if 'anomaly' in f.lower())
+            
+            logging.info(f"Training data distribution:")
+            logging.info(f"  - Normal samples: {normal_count}")
+            logging.info(f"  - Anomaly samples: {anomaly_count}")
+            
+            return True, None
+            
+        except Exception as e:
+            return False, str(e)
+
+
 class TrainingManager:
     """Manages the training process for anomaly detection models."""
     
@@ -91,6 +169,7 @@ class TrainingManager:
             logging.error(f"Error during training: {str(e)}")
             raise
 
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -133,6 +212,7 @@ def parse_args() -> argparse.Namespace:
     
     return parser.parse_args()
 
+
 def run_system_checks(config: TrainingConfig, model_config: ModelConfig, 
                      machine_type: str, mode: str, gpu_memory_limit: Optional[float] = None) -> bool:
     """Run all system checks before training."""
@@ -162,6 +242,7 @@ def run_system_checks(config: TrainingConfig, model_config: ModelConfig,
     
     logging.info("All system checks passed successfully!")
     return True
+
 
 def main():
     """Main execution function with pre-training validation."""
@@ -201,6 +282,7 @@ def main():
     except Exception as e:
         logger.error(f"Error during training: {str(e)}")
         raise
+
 
 if __name__ == "__main__":
     main()
