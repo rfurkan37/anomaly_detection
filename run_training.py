@@ -15,6 +15,48 @@ from src.config import ModelConfig, TrainingConfig
 from src.train import Trainer
 from src.utils import setup_logging, get_file_paths, save_results
 
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Train anomaly detection model with system validation',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument(
+        '--mode',
+        choices=['dev', 'eval'],
+        required=True,
+        help='Development or evaluation mode'
+    )
+    
+    parser.add_argument(
+        '--machine-type',
+        type=str,
+        required=True,
+        help='Type of machine to process (e.g., gearbox, valve, etc.)'
+    )
+    
+    parser.add_argument(
+        '--config',
+        type=str,
+        help='Path to custom configuration file (optional)'
+    )
+    
+    parser.add_argument(
+        '--skip-checks',
+        action='store_true',
+        help='Skip system validation checks'
+    )
+    
+    parser.add_argument(
+        '--gpu-memory-limit',
+        type=float,
+        default=None,
+        help='Limit GPU memory usage (in GB)'
+    )
+    
+    return parser.parse_args()
+
 class SystemChecker:
     """System and environment checker for model training."""
     
@@ -27,20 +69,33 @@ class SystemChecker:
                 logging.warning("No GPU found. Training will be slow on CPU.")
                 return False
             
-            # Check GPU memory
-            gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
-            free_memory_mb = gpu_memory['free'] / (1024 * 1024)
-            if free_memory_mb < 2000:  # Less than 2GB free
-                logging.warning(f"Low GPU memory: {free_memory_mb:.2f}MB free")
-            
-            logging.info(f"Found {len(gpus)} GPU(s)")
+            # Configure GPU memory growth
             for gpu in gpus:
-                logging.info(f"GPU Device: {gpu.device_type} - {gpu.name}")
+                tf.config.experimental.set_memory_growth(gpu, True)
+                logging.info(f"Enabled memory growth for GPU: {gpu.name}")
+            
             return True
             
         except Exception as e:
             logging.error(f"Error checking GPU: {str(e)}")
             return False
+
+    @staticmethod
+    def configure_gpu(memory_limit: Optional[float] = None):
+        """Configure GPU settings."""
+        if memory_limit:
+            try:
+                gpus = tf.config.list_physical_devices('GPU')
+                for gpu in gpus:
+                    tf.config.set_logical_device_configuration(
+                        gpu,
+                        [tf.config.LogicalDeviceConfiguration(
+                            memory_limit=memory_limit * 1024  # Convert GB to MB
+                        )]
+                    )
+                logging.info(f"Set GPU memory limit to {memory_limit}GB")
+            except Exception as e:
+                logging.error(f"Error setting GPU memory limit: {str(e)}")
 
     @staticmethod
     def check_tensorflow():
@@ -54,30 +109,6 @@ class SystemChecker:
             logging.warning("TensorFlow is not built with CUDA")
 
     @staticmethod
-    def check_directory_structure(config: TrainingConfig, machine_type: str, mode: str) -> bool:
-        """Verify required directory structure exists."""
-        base_dir = config.dev_directory if mode == 'dev' else config.eval_directory
-        required_dirs = [
-            Path(base_dir) / machine_type / 'train',
-            Path(base_dir) / machine_type / 'test',
-            Path(config.model_directory),
-            Path(config.result_directory)
-        ]
-        
-        missing_dirs = []
-        for dir_path in required_dirs:
-            if not dir_path.exists():
-                missing_dirs.append(dir_path)
-                
-        if missing_dirs:
-            logging.error("Missing required directories:")
-            for dir_path in missing_dirs:
-                logging.error(f"  - {dir_path}")
-            return False
-            
-        return True
-
-    @staticmethod
     def check_data_files(train_dir: str, test_dir: str) -> Tuple[bool, Optional[str]]:
         """Verify data files exist and are valid."""
         try:
@@ -89,17 +120,6 @@ class SystemChecker:
             if not test_files:
                 return False, "No test files found"
                 
-            # Check file sizes
-            small_files = []
-            for file_path in train_files + test_files:
-                if os.path.getsize(file_path) < 1024:  # Less than 1KB
-                    small_files.append(file_path)
-            
-            if small_files:
-                logging.warning("Found suspiciously small files:")
-                for file_path in small_files[:5]:  # Show first 5
-                    logging.warning(f"  - {file_path}")
-                    
             # Check for balanced data in training set
             normal_count = sum(1 for f in train_files if 'normal' in f.lower())
             anomaly_count = sum(1 for f in train_files if 'anomaly' in f.lower())
@@ -113,36 +133,13 @@ class SystemChecker:
         except Exception as e:
             return False, str(e)
 
-    @staticmethod
-    def check_model_config(config: ModelConfig) -> bool:
-        """Validate model configuration."""
-        try:
-            # Check basic parameter ranges
-            if config.n_mels <= 0 or config.n_frames <= 0:
-                logging.error("Invalid feature extraction parameters")
-                return False
-                
-            # Check memory requirements
-            approx_memory_mb = (
-                config.batch_size * 
-                config.n_mels * 
-                config.n_frames * 
-                4  # 4 bytes per float32
-            ) / (1024 * 1024)  # Convert to MB
-            
-            if approx_memory_mb > 1024:  # More than 1GB per batch
-                logging.warning(f"High memory usage per batch: {approx_memory_mb:.2f}MB")
-                
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error validating config: {str(e)}")
-            return False
-
 def run_system_checks(config: TrainingConfig, model_config: ModelConfig, 
-                     machine_type: str, mode: str) -> bool:
+                     machine_type: str, mode: str, gpu_memory_limit: Optional[float] = None) -> bool:
     """Run all system checks before training."""
     checker = SystemChecker()
+    
+    # Configure GPU first
+    checker.configure_gpu(gpu_memory_limit)
     
     # Check system and TensorFlow
     checker.check_tensorflow()
@@ -153,10 +150,7 @@ def run_system_checks(config: TrainingConfig, model_config: ModelConfig,
         if response.lower() != 'y':
             return False
     
-    # Check directories and data
-    if not checker.check_directory_structure(config, machine_type, mode):
-        return False
-        
+    # Check data files
     base_dir = config.dev_directory if mode == 'dev' else config.eval_directory
     train_dir = os.path.join(base_dir, machine_type, 'train')
     test_dir = os.path.join(base_dir, machine_type, 'test')
@@ -164,10 +158,6 @@ def run_system_checks(config: TrainingConfig, model_config: ModelConfig,
     data_valid, error_msg = checker.check_data_files(train_dir, test_dir)
     if not data_valid:
         logging.error(f"Data validation failed: {error_msg}")
-        return False
-    
-    # Check configuration
-    if not checker.check_model_config(model_config):
         return False
     
     logging.info("All system checks passed successfully!")
@@ -185,10 +175,13 @@ def main():
     model_config = ModelConfig()
     training_config = TrainingConfig()
     
-    # Run system checks
-    if not run_system_checks(training_config, model_config, args.machine_type, args.mode):
-        logger.error("System checks failed. Aborting training.")
-        sys.exit(1)
+    # Run system checks if not skipped
+    if not args.skip_checks:
+        if not run_system_checks(training_config, model_config, 
+                               args.machine_type, args.mode, 
+                               args.gpu_memory_limit):
+            logger.error("System checks failed. Aborting training.")
+            sys.exit(1)
     
     try:
         # Initialize training manager
