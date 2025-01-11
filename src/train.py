@@ -8,6 +8,9 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras import mixed_precision
 from tqdm import tqdm
+import scipy.stats  # Add this import
+from scipy import stats  # This is also needed
+from sklearn import metrics  # Add this as well since it's used in evaluate()
 
 from .config import ModelConfig, TrainingConfig
 from .features import FeatureExtractor
