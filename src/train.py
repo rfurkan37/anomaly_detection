@@ -78,25 +78,25 @@ class Trainer:
             self.feature_extractor,
             self.model_config.batch_size
         )
-        # Mixed precision for faster training
+        
+        # Enable mixed precision
         mixed_precision.set_global_policy('mixed_float16')
         
         # Optimize callback settings
         callbacks = [
             tf.keras.callbacks.EarlyStopping(
                 monitor='val_loss',
-                patience=5,  # Reduced patience
+                patience=5,
                 restore_best_weights=True,
-                min_delta=1e-4  # Minimum improvement required
+                min_delta=1e-4
             ),
             tf.keras.callbacks.ReduceLROnPlateau(
                 monitor='val_loss',
                 factor=0.5,
-                patience=3,  # Reduced patience
+                patience=3,
                 min_delta=1e-4,
                 cooldown=1
             ),
-            # Add TensorBoard callback
             tf.keras.callbacks.TensorBoard(
                 log_dir='./logs',
                 histogram_freq=1,
@@ -104,15 +104,13 @@ class Trainer:
             )
         ]
         
-        # Train with optimized settings
+        # Train with updated settings
         history = self.model.fit(
             train_dataset,
             validation_data=val_dataset,
             epochs=self.model_config.epochs,
             callbacks=callbacks,
-            verbose=1,
-            workers=4,
-            use_multiprocessing=True
+            verbose=1
         )
         
         # Calculate threshold efficiently
@@ -174,6 +172,49 @@ class Trainer:
             distribution=self.score_distribution
         )
     
+    def calculate_threshold(self, train_files):
+        """Calculate anomaly threshold efficiently."""
+        logger.info("Calculating anomaly threshold...")
+        
+        # Process files in batches
+        batch_size = 32
+        all_scores = []
+        
+        for i in range(0, len(train_files), batch_size):
+            batch_files = train_files[i:i + batch_size]
+            batch_features = []
+            
+            # Extract features in parallel using tf.data
+            dataset = tf.data.Dataset.from_tensor_slices(batch_files)
+            dataset = dataset.map(
+                lambda x: tf.py_function(
+                    self.feature_extractor.extract_features,
+                    [x],
+                    tf.float32
+                ),
+                num_parallel_calls=tf.data.AUTOTUNE
+            )
+            dataset = dataset.prefetch(tf.data.AUTOTUNE)
+            
+            # Convert to numpy and calculate scores
+            batch_features = list(dataset.as_numpy_iterator())
+            batch_features = np.vstack(batch_features)
+            
+            # Calculate scores for batch
+            reconstructed = self.model.predict(
+                batch_features, 
+                batch_size=32,
+                verbose=0
+            )
+            scores = np.mean(np.square(batch_features - reconstructed), axis=1)
+            all_scores.extend(scores)
+        
+        all_scores = np.array(all_scores)
+        self.score_distribution = fit_score_distribution(all_scores)
+        self.threshold = calculate_threshold(self.score_distribution)
+        
+        return all_scores
+    
     @classmethod
     def load(cls, path: str, model_config: ModelConfig, training_config: TrainingConfig) -> 'Trainer':
         """Load a saved model and configuration."""
@@ -189,48 +230,3 @@ class Trainer:
         trainer.score_distribution = data['distribution']
         
         return trainer
-    
-    def calculate_threshold(self, train_files):
-        """Calculate anomaly threshold more efficiently."""
-        logger.info("Calculating anomaly threshold...")
-    
-        # Process files in batches
-        batch_size = 32
-        all_scores = []
-    
-        for i in tqdm(range(0, len(train_files), batch_size), desc="Processing files"):
-            batch_files = train_files[i:i + batch_size]
-            batch_features = []
-        
-            # Extract features in parallel using tf.data
-            dataset = tf.data.Dataset.from_tensor_slices(batch_files)
-            dataset = dataset.map(
-                lambda x: tf.py_function(
-                    self.feature_extractor.extract_features,
-                    [x],
-                    tf.float32
-                ),
-                num_parallel_calls=tf.data.AUTOTUNE
-            )
-            dataset = dataset.prefetch(tf.data.AUTOTUNE)
-        
-            # Convert to numpy and calculate scores
-            batch_features = list(dataset.as_numpy_iterator())
-            batch_features = np.vstack(batch_features)
-        
-            # Calculate scores for batch
-            reconstructed = self.model.predict(
-                batch_features, 
-                batch_size=32,
-                verbose=0
-            )
-            scores = np.mean(np.square(batch_features - reconstructed), axis=1)
-            all_scores.extend(scores)
-    
-        all_scores = np.array(all_scores)
-        self.score_distribution = fit_score_distribution(all_scores)
-    
-        # Use the utility function to calculate threshold
-        self.threshold = calculate_threshold(self.score_distribution)
-    
-        return all_scores
