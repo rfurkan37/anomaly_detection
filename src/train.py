@@ -187,8 +187,8 @@ class Trainer:
         
         os.makedirs(path, exist_ok=True)
         
-        # Save model
-        model_path = os.path.join(path, 'model')
+        # Save model with .h5 extension
+        model_path = os.path.join(path, 'model.h5')
         self.model.save(model_path)
         
         # Save threshold and distribution
@@ -197,14 +197,14 @@ class Trainer:
             threshold=self.threshold,
             distribution=self.score_distribution
         )
-    
+
     @classmethod
     def load(cls, path: str, model_config: ModelConfig, training_config: TrainingConfig) -> 'Trainer':
         """Load a saved model and configuration."""
         trainer = cls(model_config, training_config)
         
-        # Load model
-        model_path = os.path.join(path, 'model')
+        # Load model with .h5 extension
+        model_path = os.path.join(path, 'model.h5')
         trainer.model = AnomalyDetector.load(model_path)
         
         # Load threshold and distribution
