@@ -1,0 +1,13 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+src/__pycache__/
+
+# Data directory
+data/
+
+# Metal config cache
+metal_config.cpython-*.pyc
+.DS_Store
+metal_config.py
