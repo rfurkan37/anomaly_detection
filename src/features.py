@@ -11,19 +11,19 @@ from .config import ModelConfig
 logger = logging.getLogger(__name__)
 
 class FeatureExtractor:
-    """Audio feature extraction pipeline."""
+    """Audio feature extraction pipeline matching DCASE baseline."""
     
     def __init__(self, config: ModelConfig):
         self.config = config
         
     def extract_features(self, audio_path: Union[str, tf.Tensor]) -> np.ndarray:
-        """Extract mel-spectrogram features from audio file.
+        """Extract mel-spectrogram features exactly as DCASE baseline.
         
         Args:
-            audio_path: Path to audio file, can be string or TensorFlow tensor
+            audio_path: Path to audio file
             
         Returns:
-            np.ndarray: Extracted features with shape (sequence_length, feature_dim)
+            np.ndarray: Features with shape (n_vectors, feature_dim)
         """
         try:
             # Convert tensor to string if needed
@@ -35,7 +35,7 @@ class FeatureExtractor:
             # Load audio
             y, sr = librosa.load(audio_path, sr=None, mono=True)
             
-            # Generate mel spectrogram
+            # Generate mel spectrogram exactly as DCASE
             mel_spec = librosa.feature.melspectrogram(
                 y=y,
                 sr=sr,
@@ -45,14 +45,13 @@ class FeatureExtractor:
                 power=self.config.power
             )
             
-            # Convert to log scale
-            log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
+            # Convert to log scale with same epsilon handling as DCASE
+            log_mel_spec = 20.0 / self.config.power * np.log10(
+                np.maximum(mel_spec, np.finfo(float).eps)
+            )
             
-            # Get frame features
+            # Frame features exactly as DCASE
             features = self._frame_features(log_mel_spec)
-            
-            # Pad or truncate to fixed length
-            features = self._pad_or_truncate(features)
             
             return features
             
@@ -61,30 +60,28 @@ class FeatureExtractor:
             raise
     
     def _frame_features(self, features: np.ndarray) -> np.ndarray:
-        """Create overlapping frames from features."""
-        n_samples = features.shape[1]
-        n_dims = features.shape[0] * self.config.n_frames
-        n_vectors = n_samples - self.config.n_frames + 1
+        """Create frames exactly as DCASE baseline."""
+        n_frames = self.config.n_frames
+        n_mels = self.config.n_mels
         
-        vectors = np.zeros((n_vectors, n_dims))
-        for t in range(self.config.n_frames):
-            vectors[:, features.shape[0] * t : features.shape[0] * (t + 1)] = \
+        # Calculate dimensions exactly as DCASE
+        n_samples = features.shape[1]
+        n_vectors = n_samples - n_frames + 1
+        
+        if n_vectors < 1:
+            return np.empty((0, n_mels * n_frames))
+        
+        # Create vectors exactly as DCASE
+        vectors = np.zeros((n_vectors, n_mels * n_frames))
+        for t in range(n_frames):
+            vectors[:, n_mels * t : n_mels * (t + 1)] = \
                 features[:, t : t + n_vectors].T
+                
+        # Apply hop frames - this is crucial
+        vectors = vectors[::self.config.n_hop_frames, :]
         
         return vectors
 
-    def _pad_or_truncate(self, features: np.ndarray) -> np.ndarray:
-        """Pad or truncate features to fixed length."""
-        if features.shape[0] > self.config.sequence_length:
-            # Truncate to fixed length
-            return features[:self.config.sequence_length, :]
-        elif features.shape[0] < self.config.sequence_length:
-            # Pad with zeros to fixed length
-            padding = np.zeros((self.config.sequence_length - features.shape[0], features.shape[1]))
-            return np.vstack([features, padding])
-        else:
-            return features
-
     def get_feature_dim(self) -> Tuple[int, int]:
-        """Get the feature dimensions (sequence_length, feature_dim)."""
+        """Get feature dimensions."""
         return self.config.sequence_length, self.config.n_mels * self.config.n_frames

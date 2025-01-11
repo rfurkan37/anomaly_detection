@@ -13,13 +13,15 @@ class ModelConfig:
     n_fft: int = 1024
     hop_length: int = 512
     power: float = 2.0
-    sequence_length: int = 300  # Fixed sequence length for all samples
+    n_hop_frames: int = 1  # Number of frames to skip for next frame
     
     # Training
     lr: float = 0.001
     epochs: int = 100
-    batch_size: int = 32  # Reduced batch size to help with memory
+    batch_size: int = 512  # Reduced batch size to help with memory
     validation_split: float = 0.1
+    shuffle: bool = True
+    verbose: int = 1
     
     # Model architecture
     hidden_dims: list = None
