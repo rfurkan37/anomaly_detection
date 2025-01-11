@@ -7,17 +7,11 @@ from typing import List, Optional, Dict, Tuple
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import mixed_precision
+from tqdm import tqdm
 
 from .config import ModelConfig, TrainingConfig
 from .features import FeatureExtractor
 from .model import AnomalyDetector
-from .utils import (
-    create_dataset,
-    calculate_anomaly_scores,
-    fit_score_distribution,
-    calculate_threshold,
-    evaluate_predictions
-)
 
 logger = logging.getLogger(__name__)
 
@@ -41,56 +35,62 @@ class Trainer:
         val_files = shuffled_files[split_idx:].tolist()
         logger.info(f"Split data into {len(train_files)} training and {len(val_files)} validation files")
         return train_files, val_files
+
+    def _extract_features_batch(self, file_paths: List[str]) -> np.ndarray:
+        """Extract features from a batch of files."""
+        features_list = []
+        for file_path in tqdm(file_paths, desc="Extracting features"):
+            try:
+                features = self.feature_extractor.extract_features(file_path)
+                features_list.append(features)
+            except Exception as e:
+                logger.error(f"Error processing file {file_path}: {str(e)}")
+                continue
         
-    def _prepare_datasets(self, train_files: List[str], val_files: List[str]):
-        """Prepare training and validation datasets."""
-        train_features = []
-        val_features = []
+        if not features_list:
+            raise ValueError("No features could be extracted from the files")
         
-        # Process training files
-        for file_path in train_files:
-            features = self.feature_extractor.extract_features(file_path)
-            train_features.append(features)
-        
-        # Process validation files
-        for file_path in val_files:
-            features = self.feature_extractor.extract_features(file_path)
-            val_features.append(features)
-        
-        # Stack features
-        train_data = np.vstack(train_features)
-        val_data = np.vstack(val_features)
-        
-        # Create datasets
-        train_dataset = tf.data.Dataset.from_tensor_slices(train_data)
-        train_dataset = train_dataset.shuffle(buffer_size=10000)
-        train_dataset = train_dataset.batch(self.model_config.batch_size)
-        train_dataset = train_dataset.prefetch(tf.data.AUTOTUNE)
-        
-        val_dataset = tf.data.Dataset.from_tensor_slices(val_data)
-        val_dataset = val_dataset.batch(self.model_config.batch_size)
-        val_dataset = val_dataset.prefetch(tf.data.AUTOTUNE)
-        
-        return train_dataset, val_dataset
+        return np.vstack(features_list)
+
+    def _create_tf_dataset(self, features: np.ndarray, batch_size: int, shuffle: bool = True) -> tf.data.Dataset:
+        """Create a TensorFlow dataset from features."""
+        dataset = tf.data.Dataset.from_tensor_slices((features, features))
+        if shuffle:
+            dataset = dataset.shuffle(buffer_size=10000)
+        dataset = dataset.batch(batch_size)
+        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+        return dataset
 
     def train(self, train_files: List[str]) -> Dict:
         """Train the anomaly detection model."""
         logger.info("Starting model training...")
         
-        # Split data
+        # Split files
         train_split, val_split = self._split_files(
             train_files, 
             self.model_config.validation_split
         )
         
-        # Prepare datasets
-        train_dataset, val_dataset = self._prepare_datasets(train_split, val_split)
+        # Extract features
+        logger.info("Processing training data...")
+        train_features = self._extract_features_batch(train_split)
+        logger.info("Processing validation data...")
+        val_features = self._extract_features_batch(val_split)
         
-        # Get input dimension from a sample file
-        sample_features = self.feature_extractor.extract_features(train_files[0])
-        input_dim = sample_features.shape[-1]
+        # Create datasets
+        train_dataset = self._create_tf_dataset(
+            train_features, 
+            self.model_config.batch_size, 
+            shuffle=True
+        )
+        val_dataset = self._create_tf_dataset(
+            val_features, 
+            self.model_config.batch_size, 
+            shuffle=False
+        )
         
         # Create and compile model
+        input_dim = train_features.shape[-1]
         self.model = AnomalyDetector(input_dim, self.model_config)
         self.model.compile_model(self.model_config.lr)
         
@@ -127,7 +127,7 @@ class Trainer:
         
         # Calculate threshold
         logger.info("Calculating anomaly threshold...")
-        self.calculate_threshold(train_files)
+        self.calculate_threshold(train_split)
         
         return history.history
     
@@ -135,65 +135,45 @@ class Trainer:
         """Calculate anomaly threshold efficiently."""
         logger.info("Calculating anomaly threshold...")
         
-        batch_size = 32
-        all_scores = []
+        features = self._extract_features_batch(train_files)
+        reconstructed = self.model.predict(features, batch_size=32, verbose=1)
+        scores = np.mean(np.square(features - reconstructed), axis=1)
         
-        for i in range(0, len(train_files), batch_size):
-            batch_files = train_files[i:i + batch_size]
-            batch_features = []
-            
-            # Extract features
-            for file_path in batch_files:
-                features = self.feature_extractor.extract_features(file_path)
-                batch_features.append(features)
-            
-            # Stack features
-            batch_features = np.vstack(batch_features)
-            
-            # Calculate reconstruction error
-            reconstructed = self.model.predict(batch_features, batch_size=32, verbose=0)
-            scores = np.mean(np.square(batch_features - reconstructed), axis=1)
-            all_scores.extend(scores)
+        # Fit score distribution using gamma distribution
+        shape_hat, loc_hat, scale_hat = scipy.stats.gamma.fit(scores)
+        self.score_distribution = (shape_hat, loc_hat, scale_hat)
         
-        all_scores = np.array(all_scores)
-        self.score_distribution = fit_score_distribution(all_scores)
-        self.threshold = calculate_threshold(self.score_distribution)
+        # Calculate threshold as the 95th percentile
+        self.threshold = scipy.stats.gamma.ppf(0.95, shape_hat, loc=loc_hat, scale=scale_hat)
         
-        return all_scores
+        return scores
     
     def evaluate(self, test_files: List[str], labels: Optional[List[int]] = None) -> Dict:
         """Evaluate model performance."""
         if self.model is None:
             raise ValueError("Model must be trained before evaluation")
         
-        test_features = []
-        for file_path in test_files:
-            features = self.feature_extractor.extract_features(file_path)
-            test_features.append(features)
+        # Extract features from test files
+        test_features = self._extract_features_batch(test_files)
         
-        test_features = np.vstack(test_features)
-        scores = calculate_anomaly_scores(self.model, test_features)
+        # Calculate reconstruction error
+        reconstructed = self.model.predict(test_features, batch_size=32, verbose=1)
+        scores = np.mean(np.square(test_features - reconstructed), axis=1)
         
-        # Calculate per-file scores
-        file_scores = []
-        start_idx = 0
-        for file_path in test_files:
-            file_features = self.feature_extractor.extract_features(file_path)
-            end_idx = start_idx + len(file_features)
-            file_scores.append(np.mean(scores[start_idx:end_idx]))
-            start_idx = end_idx
-        
+        # Calculate results
         results = {
-            'anomaly_scores': file_scores,
-            'predictions': [score > self.threshold for score in file_scores]
+            'anomaly_scores': scores.tolist(),
+            'predictions': (scores > self.threshold).tolist()
         }
         
         if labels is not None:
-            results.update(evaluate_predictions(
-                np.array(labels),
-                np.array(file_scores),
-                self.threshold
-            ))
+            results.update({
+                'accuracy': metrics.accuracy_score(labels, results['predictions']),
+                'precision': metrics.precision_score(labels, results['predictions']),
+                'recall': metrics.recall_score(labels, results['predictions']),
+                'f1': metrics.f1_score(labels, results['predictions']),
+                'auc': metrics.roc_auc_score(labels, scores)
+            })
         
         return results
     
