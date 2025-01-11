@@ -9,8 +9,8 @@ from .config import ModelConfig
 class AnomalyDetector(tf.keras.Model):
     """Autoencoder-based anomaly detector matching DCASE baseline."""
     
-    def __init__(self, input_dim: int, config: ModelConfig):
-        super().__init__()
+    def __init__(self, input_dim: int, config: ModelConfig, **kwargs):
+        super().__init__(**kwargs)
         self.config = config
         self.input_dim = input_dim
         
@@ -86,3 +86,32 @@ class AnomalyDetector(tf.keras.Model):
             optimizer=tf.keras.optimizers.Adam(learning_rate),
             loss='mse'  # DCASE uses mean_squared_error
         )
+        
+    def get_config(self):
+        """Provide configuration for model serialization."""
+        config = super().get_config()
+        config.update({
+            'input_dim': self.input_dim,
+            'config': self.config
+        })
+        return config
+    
+    @classmethod
+    def from_config(cls, config, custom_objects=None):
+        """Reconstruct the model from its configuration."""
+        # Remove any serialization-specific keys
+        config.pop('trainable', None)
+        config.pop('dtype', None)
+        
+        # Recreate the model
+        input_dim = config.pop('input_dim')
+        model_config = config.pop('config')
+        return cls(input_dim, model_config, **config)
+    
+    def save(self, filepath, **kwargs):
+        """Override save method to ensure custom objects are handled."""
+        custom_objects = {
+            'AnomalyDetector': AnomalyDetector,
+            'ModelConfig': type(self.config)
+        }
+        super().save(filepath, custom_objects=custom_objects, **kwargs)
