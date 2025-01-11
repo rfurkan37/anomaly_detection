@@ -13,7 +13,7 @@ class AnomalyDetector(tf.keras.Model):
         super().__init__()
         self.config = config
         self.input_dim = input_dim
-        self.total_input_dim = self.config.sequence_length * self.input_dim
+        self.total_input_dim = input_dim  # Remove sequence_length multiplication
         
         self.encoder = self._build_encoder()
         self.decoder = self._build_decoder()
@@ -21,9 +21,8 @@ class AnomalyDetector(tf.keras.Model):
     def _build_encoder(self) -> tf.keras.Sequential:
         """Build encoder part of the model."""
         return tf.keras.Sequential([
-            # Input and flatten
-            tf.keras.layers.Input(shape=(self.config.sequence_length, self.input_dim)),
-            tf.keras.layers.Flatten(),
+            # Input layer
+            tf.keras.layers.InputLayer(input_shape=(self.input_dim,)),
             
             # Dense layers with batch norm
             *[tf.keras.layers.Dense(
@@ -51,8 +50,7 @@ class AnomalyDetector(tf.keras.Model):
             ) for dim in reversed(self.config.hidden_dims)],
             
             # Output layer
-            tf.keras.layers.Dense(self.total_input_dim),
-            tf.keras.layers.Reshape((self.config.sequence_length, self.input_dim))
+            tf.keras.layers.Dense(self.total_input_dim)
         ])
     
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
@@ -68,7 +66,7 @@ class AnomalyDetector(tf.keras.Model):
             loss='mse',
             metrics=['mae']
         )
-    # Missing implementation in AnomalyDetector class
+        
     @classmethod
     def load(cls, path: str):
         """Load model from path."""

@@ -175,15 +175,15 @@ class Trainer:
     def calculate_threshold(self, train_files):
         """Calculate anomaly threshold efficiently."""
         logger.info("Calculating anomaly threshold...")
-        
+    
         # Process files in batches
         batch_size = 32
         all_scores = []
-        
+    
         for i in range(0, len(train_files), batch_size):
             batch_files = train_files[i:i + batch_size]
             batch_features = []
-            
+        
             # Extract features in parallel using tf.data
             dataset = tf.data.Dataset.from_tensor_slices(batch_files)
             dataset = dataset.map(
@@ -194,25 +194,32 @@ class Trainer:
                 ),
                 num_parallel_calls=tf.data.AUTOTUNE
             )
+        
+            # Reshape features to match model input
+            dataset = dataset.map(lambda x: tf.reshape(x, [-1, x.shape[-1]]))
             dataset = dataset.prefetch(tf.data.AUTOTUNE)
-            
+        
             # Convert to numpy and calculate scores
             batch_features = list(dataset.as_numpy_iterator())
-            batch_features = np.vstack(batch_features)
+            if batch_features:  # Check if we got any features
+                batch_features = np.vstack(batch_features)
             
-            # Calculate scores for batch
-            reconstructed = self.model.predict(
+                # Calculate scores for batch
+                reconstructed = self.model.predict(
                 batch_features, 
                 batch_size=32,
                 verbose=0
-            )
-            scores = np.mean(np.square(batch_features - reconstructed), axis=1)
-            all_scores.extend(scores)
+                )
+                scores = np.mean(np.square(batch_features - reconstructed), axis=1)
+                all_scores.extend(scores)
+    
+        if not all_scores:
+            raise ValueError("No features could be extracted from the training files")
         
         all_scores = np.array(all_scores)
         self.score_distribution = fit_score_distribution(all_scores)
         self.threshold = calculate_threshold(self.score_distribution)
-        
+    
         return all_scores
     
     @classmethod

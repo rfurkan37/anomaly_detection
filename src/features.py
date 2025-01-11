@@ -48,9 +48,11 @@ class FeatureExtractor:
             # Convert to log scale
             log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
             
-            # Create frames and ensure fixed length
+            # Get frame features
             features = self._frame_features(log_mel_spec)
-            features = self._pad_or_truncate(features)
+            
+            # Flatten the features to 2D
+            features = features.reshape(-1, features.shape[-1])
             
             return features
             
