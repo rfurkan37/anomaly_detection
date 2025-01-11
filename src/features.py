@@ -4,7 +4,8 @@
 import logging
 import numpy as np
 import librosa
-from typing import Tuple
+import tensorflow as tf
+from typing import Tuple, Union
 from .config import ModelConfig
 
 logger = logging.getLogger(__name__)
@@ -15,9 +16,22 @@ class FeatureExtractor:
     def __init__(self, config: ModelConfig):
         self.config = config
         
-    def extract_features(self, audio_path: str) -> np.ndarray:
-        """Extract mel-spectrogram features from audio file."""
+    def extract_features(self, audio_path: Union[str, tf.Tensor]) -> np.ndarray:
+        """Extract mel-spectrogram features from audio file.
+        
+        Args:
+            audio_path: Path to audio file, can be string or TensorFlow tensor
+            
+        Returns:
+            np.ndarray: Extracted features
+        """
         try:
+            # Convert tensor to string if needed
+            if isinstance(audio_path, tf.Tensor):
+                audio_path = audio_path.numpy().decode('utf-8')
+            elif isinstance(audio_path, bytes):
+                audio_path = audio_path.decode('utf-8')
+            
             # Load audio
             y, sr = librosa.load(audio_path, sr=None, mono=True)
             
