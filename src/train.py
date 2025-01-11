@@ -6,7 +6,7 @@ import logging
 from typing import List, Optional, Dict, Tuple
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.mixed_precision import experimental as mixed_precision
+from tensorflow.keras import mixed_precision
 
 from .config import ModelConfig, TrainingConfig
 from .features import FeatureExtractor
