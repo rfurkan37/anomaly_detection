@@ -15,6 +15,15 @@ from sklearn import metrics  # Add this as well since it's used in evaluate()
 from .config import ModelConfig, TrainingConfig
 from .features import FeatureExtractor
 from .model import AnomalyDetector
+from .persistence import ModelPersistence
+from .data_utils import (
+    split_files,
+    extract_features_batch,
+    create_dataset,
+    calculate_anomaly_scores,
+    fit_threshold,
+    evaluate_model
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,24 +78,24 @@ class Trainer:
         logger.info("Starting model training...")
         
         # Split files
-        train_split, val_split = self._split_files(
+        train_split, val_split = split_files(
             train_files, 
             self.model_config.validation_split
         )
         
         # Extract features
         logger.info("Processing training data...")
-        train_features = self._extract_features_batch(train_split)
+        train_features = extract_features_batch(self.feature_extractor, train_split)
         logger.info("Processing validation data...")
-        val_features = self._extract_features_batch(val_split)
+        val_features = extract_features_batch(self.feature_extractor, val_split)
         
         # Create datasets
-        train_dataset = self._create_tf_dataset(
+        train_dataset = create_dataset(
             train_features, 
             self.model_config.batch_size, 
             shuffle=True
         )
-        val_dataset = self._create_tf_dataset(
+        val_dataset = create_dataset(
             val_features, 
             self.model_config.batch_size, 
             shuffle=False
@@ -134,90 +143,51 @@ class Trainer:
         
         return history.history
     
-    def calculate_threshold(self, train_files: List[str]) -> np.ndarray:
-        """Calculate anomaly threshold efficiently."""
-        logger.info("Calculating anomaly threshold...")
-        
-        features = self._extract_features_batch(train_files)
-        reconstructed = self.model.predict(features, batch_size=32, verbose=1)
-        scores = np.mean(np.square(features - reconstructed), axis=1)
-        
-        # Fit score distribution using gamma distribution
-        shape_hat, loc_hat, scale_hat = scipy.stats.gamma.fit(scores)
-        self.score_distribution = (shape_hat, loc_hat, scale_hat)
-        
-        # Calculate threshold as the 95th percentile
-        self.threshold = scipy.stats.gamma.ppf(0.95, shape_hat, loc=loc_hat, scale=scale_hat)
-        
-        return scores
+    def calculate_threshold(self, train_files: List[str]) -> None:
+        """Calculate anomaly threshold."""
+        features = extract_features_batch(self.feature_extractor, train_files)
+        scores = calculate_anomaly_scores(self.model, features)
+        self.threshold, self.score_distribution = fit_threshold(scores)
     
     def evaluate(self, test_files: List[str], labels: Optional[List[int]] = None) -> Dict:
         """Evaluate model performance."""
         if self.model is None:
             raise ValueError("Model must be trained before evaluation")
         
-        # Extract features from test files
-        test_features = self._extract_features_batch(test_files)
+        # Extract features and calculate scores
+        test_features = extract_features_batch(self.feature_extractor, test_files)
+        scores = calculate_anomaly_scores(self.model, test_features)
+        predictions = scores > self.threshold
         
-        # Calculate reconstruction error
-        reconstructed = self.model.predict(test_features, batch_size=32, verbose=1)
-        scores = np.mean(np.square(test_features - reconstructed), axis=1)
-        
-        # Calculate results
-        results = {
-            'anomaly_scores': scores.tolist(),
-            'predictions': (scores > self.threshold).tolist()
-        }
-        
-        if labels is not None:
-            results.update({
-                'accuracy': metrics.accuracy_score(labels, results['predictions']),
-                'precision': metrics.precision_score(labels, results['predictions']),
-                'recall': metrics.recall_score(labels, results['predictions']),
-                'f1': metrics.f1_score(labels, results['predictions']),
-                'auc': metrics.roc_auc_score(labels, scores)
-            })
-        
-        return results
+        # Evaluate results
+        return evaluate_model(predictions, scores, labels)
     
     def save(self, path: str):
         """Save the trained model and configuration."""
         if self.model is None:
             raise ValueError("No trained model to save")
-        
-        os.makedirs(path, exist_ok=True)
-        
-        # Save model
-        model_path = os.path.join(path, 'model.keras')  # Using .keras extension as recommended
-        self.model.save(model_path)
-        
-        # Save threshold and distribution
-        np.savez(
-            os.path.join(path, 'threshold.npz'),
+            
+        ModelPersistence.save_model(
+            model=self.model,
+            save_path=path,
             threshold=self.threshold,
-            distribution=self.score_distribution
+            score_distribution=self.score_distribution
         )
 
     @classmethod
     def load(cls, path: str, model_config: ModelConfig, training_config: TrainingConfig) -> 'Trainer':
-        """Load a saved model and configuration."""
+        """Load a trained model."""
         trainer = cls(model_config, training_config)
         
         try:
-            # Load model
-            model_path = os.path.join(path, 'model.keras')
-            trainer.model = AnomalyDetector.load_model(model_path)
+            trainer.model, threshold_data = ModelPersistence.load_model(
+                path,
+                return_threshold=True
+            )
             
-            # Load threshold and distribution
-            threshold_path = os.path.join(path, 'threshold.npz')
-            if os.path.exists(threshold_path):
-                data = np.load(threshold_path)
-                trainer.threshold = float(data['threshold'])
-                trainer.score_distribution = data['distribution']
-            else:
-                logger.warning("No threshold file found. Using default threshold.")
-                trainer.threshold = None
-                trainer.score_distribution = None
+            if threshold_data:
+                trainer.threshold = threshold_data['threshold']
+                trainer.score_distribution = threshold_data['distribution']
             
             return trainer
             
