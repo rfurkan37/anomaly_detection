@@ -13,7 +13,6 @@ class AnomalyDetector(tf.keras.Model):
         super().__init__()
         self.config = config
         self.input_dim = input_dim
-        self.total_input_dim = input_dim  # Remove sequence_length multiplication
         
         self.encoder = self._build_encoder()
         self.decoder = self._build_decoder()
@@ -22,14 +21,19 @@ class AnomalyDetector(tf.keras.Model):
         """Build encoder part of the model."""
         return tf.keras.Sequential([
             # Input layer
-            tf.keras.layers.InputLayer(input_shape=(self.input_dim,)),
+            tf.keras.layers.Dense(
+                self.config.hidden_dims[0],
+                activation='relu',
+                kernel_initializer='he_normal',
+                input_shape=(self.input_dim,)
+            ),
             
-            # Dense layers with batch norm
+            # Additional dense layers
             *[tf.keras.layers.Dense(
                 dim, 
                 activation='relu',
                 kernel_initializer='he_normal'
-            ) for dim in self.config.hidden_dims],
+            ) for dim in self.config.hidden_dims[1:]],
             
             # Bottleneck
             tf.keras.layers.Dense(
@@ -50,7 +54,7 @@ class AnomalyDetector(tf.keras.Model):
             ) for dim in reversed(self.config.hidden_dims)],
             
             # Output layer
-            tf.keras.layers.Dense(self.total_input_dim)
+            tf.keras.layers.Dense(self.input_dim)
         ])
     
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:

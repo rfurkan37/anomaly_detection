@@ -48,8 +48,12 @@ def create_dataset(file_paths: List[str], feature_extractor, batch_size: int) ->
         try:
             # Extract features
             features = feature_extractor.extract_features(file_path.numpy().decode())
+            
+            # Reshape features to 2D (flatten the sequence dimension)
+            features = features.reshape(-1, features.shape[-1])
+            
             # Convert to tensor with explicit type
-            features = tf.cast(features, tf.float16)  # Use float16 for mixed precision
+            features = tf.cast(features, tf.float32)
             return features, features
         except Exception as e:
             logger.error(f"Error processing file {file_path}: {str(e)}")
@@ -63,24 +67,24 @@ def create_dataset(file_paths: List[str], feature_extractor, batch_size: int) ->
         lambda x: tf.py_function(
             load_and_preprocess,
             [x],
-            [tf.float16, tf.float16]
+            [tf.float32, tf.float32]
         ),
         num_parallel_calls=tf.data.AUTOTUNE
     )
     
     # Set shapes explicitly
-    seq_length, feature_dim = feature_extractor.get_feature_dim()
+    feature_dim = feature_extractor.get_feature_dim()[-1]
     dataset = dataset.map(
         lambda x, y: (
-            tf.ensure_shape(x, [seq_length, feature_dim]),
-            tf.ensure_shape(y, [seq_length, feature_dim])
+            tf.ensure_shape(x, [None, feature_dim]),
+            tf.ensure_shape(y, [None, feature_dim])
         )
     )
     
     # Optimize dataset performance
     dataset = dataset.cache()  # Cache the processed data
     dataset = dataset.shuffle(buffer_size=min(len(file_paths), 1000))
-    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(tf.data.AUTOTUNE)
     
     return dataset
