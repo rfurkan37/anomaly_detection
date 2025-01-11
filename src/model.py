@@ -14,10 +14,12 @@ class AnomalyDetector(tf.keras.Model):
         self,
         input_dim: int,
         config: ModelConfig = None,
-        name: str = 'anomaly_detector',
+        name: str = 'anomaly_detector',  # Add name parameter
+        trainable: bool = True,          # Add trainable parameter
+        dtype = None,                    # Add dtype parameter
         **kwargs
     ):
-        super().__init__(name=name, **kwargs)
+        super().__init__(name=name, trainable=trainable, dtype=dtype, **kwargs)
         self.input_dim = input_dim
         self.config = config if config is not None else ModelConfig()
         
@@ -99,7 +101,6 @@ class AnomalyDetector(tf.keras.Model):
         )
     
     def get_config(self):
-        """Get model configuration."""
         config = super().get_config()
         config.update({
             'input_dim': self.input_dim,
@@ -110,16 +111,28 @@ class AnomalyDetector(tf.keras.Model):
     @classmethod
     def from_config(cls, config):
         """Create model from configuration."""
-        config = config.copy()
-        input_dim = config.pop('input_dim')
-        model_config_dict = config.pop('config', None)
+        # Extract base config for parent class
+        base_config = {
+            'name': config.get('name', 'anomaly_detector'),
+            'trainable': config.get('trainable', True),
+            'dtype': config.get('dtype', None)
+        }
+        
+        # Extract AnomalyDetector specific config
+        input_dim = config['input_dim']
+        model_config_dict = config.get('config')
         
         if model_config_dict is not None:
             model_config = ModelConfig(**model_config_dict)
         else:
             model_config = ModelConfig()
             
-        return cls(input_dim=input_dim, config=model_config, **config)
+        # Create new instance
+        return cls(
+            input_dim=input_dim,
+            config=model_config,
+            **base_config
+        )
     
     def save(self, filepath: str):
         """Save model with configuration."""
