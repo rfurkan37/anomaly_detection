@@ -21,30 +21,17 @@ class AnomalyDetector(tf.keras.Model):
         self.input_dim = input_dim
         self.config = config if config is not None else ModelConfig()
         
-        # Initialize but don't build yet
-        self._encoder = None
-        self._decoder = None
-    
-    @property
-    def encoder(self):
-        """Lazy initialization of encoder."""
-        if self._encoder is None:
-            self._encoder = self._build_encoder()
-        return self._encoder
-    
-    @property
-    def decoder(self):
-        """Lazy initialization of decoder."""
-        if self._decoder is None:
-            self._decoder = self._build_decoder()
-        return self._decoder
+        # Build encoder and decoder immediately
+        self.encoder = self._build_encoder()
+        self.decoder = self._build_decoder()
+        
+        # Build the model once to initialize all variables
+        dummy_input = tf.keras.layers.Input(shape=(input_dim,))
+        self.call(dummy_input)
     
     def _build_encoder(self) -> tf.keras.Sequential:
         """Build encoder exactly matching DCASE baseline."""
         return tf.keras.Sequential([
-            # Input layer with explicit shape
-            tf.keras.layers.InputLayer(input_shape=(self.input_dim,)),
-            
             # First dense block
             tf.keras.layers.Dense(128, kernel_initializer='he_normal'),
             tf.keras.layers.BatchNormalization(),
@@ -114,8 +101,6 @@ class AnomalyDetector(tf.keras.Model):
     def get_config(self):
         """Get model configuration."""
         config = super().get_config()
-        
-        # Add model-specific configuration
         config.update({
             'input_dim': self.input_dim,
             'config': self.config.to_dict() if self.config else None
@@ -128,7 +113,7 @@ class AnomalyDetector(tf.keras.Model):
         # Make a copy of the config to avoid modifying the original
         config = config.copy()
         
-        # Extract the essential arguments
+        # Extract essential arguments
         input_dim = config.pop('input_dim', None)
         model_config_dict = config.pop('config', None)
         
