@@ -203,13 +203,23 @@ class Trainer:
         """Load a saved model and configuration."""
         trainer = cls(model_config, training_config)
         
-        # Load model
-        model_path = os.path.join(path, 'model.keras')
-        trainer.model = AnomalyDetector.load(model_path)
-        
-        # Load threshold and distribution
-        data = np.load(os.path.join(path, 'threshold.npz'))
-        trainer.threshold = data['threshold']
-        trainer.score_distribution = data['distribution']
-        
-        return trainer
+        try:
+            # Load model
+            model_path = os.path.join(path, 'model.keras')
+            trainer.model = AnomalyDetector.load_model(model_path)
+            
+            # Load threshold and distribution
+            threshold_path = os.path.join(path, 'threshold.npz')
+            if os.path.exists(threshold_path):
+                data = np.load(threshold_path)
+                trainer.threshold = float(data['threshold'])
+                trainer.score_distribution = data['distribution']
+            else:
+                logger.warning("No threshold file found. Using default threshold.")
+                trainer.threshold = None
+                trainer.score_distribution = None
+            
+            return trainer
+            
+        except Exception as e:
+            raise ValueError(f"Error loading trainer: {str(e)}")

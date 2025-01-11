@@ -110,46 +110,26 @@ class AnomalyDetector(tf.keras.Model):
     @classmethod
     def from_config(cls, config):
         """Create model from configuration."""
-        # Make a copy of the config to avoid modifying the original
         config = config.copy()
-        
-        # Extract essential arguments
-        input_dim = config.pop('input_dim', None)
+        input_dim = config.pop('input_dim')
         model_config_dict = config.pop('config', None)
         
-        # Handle missing input_dim
-        if input_dim is None:
-            if 'build_config' in config and 'input_shape' in config['build_config']:
-                input_dim = config['build_config']['input_shape'][-1]
-            else:
-                raise ValueError("Could not determine input_dim from config")
-        
-        # Create ModelConfig instance from dict if available
         if model_config_dict is not None:
             model_config = ModelConfig(**model_config_dict)
         else:
             model_config = ModelConfig()
-        
-        # Remove TensorFlow-specific config items
-        for key in ['trainable', 'dtype', 'name', 'build_config', 'compile_config']:
-            config.pop(key, None)
-        
-        # Create new instance
-        return cls(
-            input_dim=input_dim,
-            config=model_config,
-            **config
-        )
+            
+        return cls(input_dim=input_dim, config=model_config, **config)
     
-    def save(self, filepath: str, save_format='keras', **kwargs):
+    def save(self, filepath: str):
         """Save model with configuration."""
         # Ensure the directory exists
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
-        # Save the model
-        super().save(filepath, save_format=save_format, **kwargs)
+        # Save the Keras model
+        super().save(filepath)
         
-        # Save configuration separately for easier access
+        # Save configuration separately
         config_path = os.path.join(os.path.dirname(filepath), 'model_config.json')
         with open(config_path, 'w') as f:
             json.dump({
@@ -158,14 +138,23 @@ class AnomalyDetector(tf.keras.Model):
             }, f, indent=2)
     
     @classmethod
-    def load(cls, filepath: str):
-        """Load model with configuration."""
+    def load_model(cls, filepath: str, custom_objects=None):
+        """Load the model from a saved file."""
         try:
-            # Load the model
+            # Load the Keras model
             model = tf.keras.models.load_model(
                 filepath,
                 custom_objects={'AnomalyDetector': cls}
             )
+            
+            # Load the configuration if it exists
+            config_path = os.path.join(os.path.dirname(filepath), 'model_config.json')
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                model.input_dim = config['input_dim']
+                model.config = ModelConfig(**config['config'])
+            
             return model
             
         except Exception as e:
