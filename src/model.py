@@ -1,3 +1,4 @@
+# src/model.py
 """Autoencoder model for anomaly detection."""
 
 import tensorflow as tf
@@ -14,6 +15,8 @@ class AnomalyDetector(tf.keras.Model):
         self.config = config
         self.input_dim = input_dim
         
+        # Add flatten layer to handle 3D input
+        self.flatten = tf.keras.layers.Flatten()
         self.encoder = self._build_encoder()
         self.decoder = self._build_decoder()
     
@@ -24,8 +27,7 @@ class AnomalyDetector(tf.keras.Model):
             tf.keras.layers.Dense(
                 self.config.hidden_dims[0],
                 activation='relu',
-                kernel_initializer='he_normal',
-                input_shape=(self.input_dim,)
+                kernel_initializer='he_normal'
             ),
             
             # Additional dense layers
@@ -59,9 +61,15 @@ class AnomalyDetector(tf.keras.Model):
     
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
         """Forward pass through the model."""
-        encoded = self.encoder(inputs, training=training)
+        # Flatten input first
+        x = self.flatten(inputs)
+        encoded = self.encoder(x, training=training)
         decoded = self.decoder(encoded, training=training)
-        return decoded
+        # Reshape output to match input shape
+        batch_size = tf.shape(inputs)[0]
+        seq_length = tf.shape(inputs)[1]
+        feature_dim = self.input_dim // seq_length
+        return tf.reshape(decoded, [batch_size, seq_length, feature_dim])
     
     def compile_model(self, learning_rate: float = 1e-3):
         """Compile the model."""

@@ -23,7 +23,7 @@ class FeatureExtractor:
             audio_path: Path to audio file, can be string or TensorFlow tensor
             
         Returns:
-            np.ndarray: Extracted features
+            np.ndarray: Extracted features with shape (sequence_length, feature_dim)
         """
         try:
             # Convert tensor to string if needed
@@ -51,8 +51,8 @@ class FeatureExtractor:
             # Get frame features
             features = self._frame_features(log_mel_spec)
             
-            # Flatten the features to 2D
-            features = features.reshape(-1, features.shape[-1])
+            # Pad or truncate to fixed length
+            features = self._pad_or_truncate(features)
             
             return features
             
