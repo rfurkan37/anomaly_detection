@@ -97,21 +97,22 @@ class AnomalyDetector(tf.keras.Model):
         return config
     
     @classmethod
-    def from_config(cls, config, custom_objects=None):
+    def from_config(cls, config):
         """Reconstruct the model from its configuration."""
-        # Remove any serialization-specific keys
+        # Extract required arguments
+        input_dim = config.pop('input_dim', None)
+        model_config = config.pop('config', None)
+        
+        # Remove any TensorFlow-specific config items
         config.pop('trainable', None)
         config.pop('dtype', None)
+        config.pop('name', None)
         
-        # Recreate the model
-        input_dim = config.pop('input_dim')
-        model_config = config.pop('config')
-        return cls(input_dim, model_config, **config)
+        # Create new instance
+        return cls(input_dim=input_dim, config=model_config, **config)
     
     def save(self, filepath, **kwargs):
-        """Override save method to ensure custom objects are handled."""
-        custom_objects = {
-            'AnomalyDetector': AnomalyDetector,
-            'ModelConfig': type(self.config)
-        }
-        super().save(filepath, custom_objects=custom_objects, **kwargs)
+        """Save the model."""
+        # Remove custom_objects from kwargs if present
+        kwargs.pop('custom_objects', None)
+        super().save(filepath, **kwargs)
