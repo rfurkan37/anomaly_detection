@@ -15,6 +15,66 @@ from src.config import ModelConfig, TrainingConfig
 from src.train import Trainer
 from src.utils import setup_logging, get_file_paths, save_results
 
+
+class TrainingManager:
+    """Manages the training process for anomaly detection models."""
+    
+    def __init__(
+        self,
+        mode: str,
+        machine_type: str,
+        model_config: Optional[ModelConfig] = None,
+        training_config: Optional[TrainingConfig] = None
+    ):
+        self.mode = mode
+        self.machine_type = machine_type
+        self.model_config = model_config or ModelConfig()
+        self.training_config = training_config or TrainingConfig()
+        
+        # Set up paths based on mode
+        base_dir = "data/dev_data" if mode == "dev" else "data/eval_data"
+        self.train_dir = os.path.join(base_dir, machine_type, "train")
+        self.test_dir = os.path.join(base_dir, machine_type, "test")
+        
+        # Initialize trainer
+        self.trainer = Trainer(self.model_config, self.training_config)
+        
+    def prepare_data(self):
+        """Prepare training and testing data."""
+        # Get file paths
+        train_files = get_file_paths(self.train_dir, "*.wav")
+        test_files = get_file_paths(self.test_dir, "*.wav")
+        
+        return train_files, test_files
+    
+    def train_and_evaluate(self):
+        """Run the training and evaluation process."""
+        try:
+            # Prepare data
+            train_files, test_files = self.prepare_data()
+            logging.info(f"Found {len(train_files)} training files and {len(test_files)} test files")
+            
+            # Train model
+            logging.info("Starting model training...")
+            history = self.trainer.train(train_files)
+            
+            # Evaluate model
+            logging.info("Evaluating model...")
+            results = self.trainer.evaluate(test_files)
+            
+            # Save model and results
+            model_dir = os.path.join(
+                self.training_config.model_directory,
+                self.machine_type
+            )
+            self.trainer.save(model_dir)
+            
+            return history, results
+            
+        except Exception as e:
+            logging.error(f"Error during training: {str(e)}")
+            raise
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
