@@ -9,6 +9,7 @@ import numpy as np
 import tensorflow as tf
 from pathlib import Path
 from typing import List, Tuple, Optional
+from types import SimpleNamespace
 from dataclasses import dataclass
 
 from src.config import ModelConfig, TrainingConfig
@@ -39,6 +40,13 @@ class TrainingManager:
         # Initialize trainer
         self.trainer = Trainer(self.model_config, self.training_config)
         
+    def setup_paths(self):
+        """Setup required paths for training."""
+        paths = SimpleNamespace()
+        paths.train_dir = self.train_dir
+        paths.test_dir = self.test_dir
+        return paths
+        
     def prepare_data(self):
         """Prepare training and testing data."""
         # Get file paths
@@ -68,6 +76,14 @@ class TrainingManager:
                 self.machine_type
             )
             self.trainer.save(model_dir)
+            
+            # Save results
+            result_path = os.path.join(
+                self.training_config.result_directory,
+                self.machine_type,
+                self.training_config.result_file
+            )
+            save_results(results, result_path)
             
             return history, results
             
@@ -116,82 +132,6 @@ def parse_args() -> argparse.Namespace:
     )
     
     return parser.parse_args()
-
-class SystemChecker:
-    """System and environment checker for model training."""
-    
-    @staticmethod
-    def check_gpu():
-        """Check GPU availability and configuration."""
-        try:
-            gpus = tf.config.list_physical_devices('GPU')
-            if not gpus:
-                logging.warning("No GPU found. Training will be slow on CPU.")
-                return False
-            
-            # Configure GPU memory growth
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-                logging.info(f"Enabled memory growth for GPU: {gpu.name}")
-            
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error checking GPU: {str(e)}")
-            return False
-
-    @staticmethod
-    def configure_gpu(memory_limit: Optional[float] = None):
-        """Configure GPU settings."""
-        if memory_limit:
-            try:
-                gpus = tf.config.list_physical_devices('GPU')
-                for gpu in gpus:
-                    tf.config.set_logical_device_configuration(
-                        gpu,
-                        [tf.config.LogicalDeviceConfiguration(
-                            memory_limit=memory_limit * 1024  # Convert GB to MB
-                        )]
-                    )
-                logging.info(f"Set GPU memory limit to {memory_limit}GB")
-            except Exception as e:
-                logging.error(f"Error setting GPU memory limit: {str(e)}")
-
-    @staticmethod
-    def check_tensorflow():
-        """Verify TensorFlow installation and configuration."""
-        logging.info(f"TensorFlow version: {tf.__version__}")
-        
-        # Check if TF can access GPU
-        if tf.test.is_built_with_cuda():
-            logging.info("TensorFlow is built with CUDA")
-        else:
-            logging.warning("TensorFlow is not built with CUDA")
-
-    @staticmethod
-    def check_data_files(train_dir: str, test_dir: str) -> Tuple[bool, Optional[str]]:
-        """Verify data files exist and are valid."""
-        try:
-            train_files = get_file_paths(train_dir, pattern="*.wav")
-            test_files = get_file_paths(test_dir, pattern="*.wav")
-            
-            if not train_files:
-                return False, "No training files found"
-            if not test_files:
-                return False, "No test files found"
-                
-            # Check for balanced data in training set
-            normal_count = sum(1 for f in train_files if 'normal' in f.lower())
-            anomaly_count = sum(1 for f in train_files if 'anomaly' in f.lower())
-            
-            logging.info(f"Training data distribution:")
-            logging.info(f"  - Normal samples: {normal_count}")
-            logging.info(f"  - Anomaly samples: {anomaly_count}")
-            
-            return True, None
-            
-        except Exception as e:
-            return False, str(e)
 
 def run_system_checks(config: TrainingConfig, model_config: ModelConfig, 
                      machine_type: str, mode: str, gpu_memory_limit: Optional[float] = None) -> bool:
@@ -252,18 +192,11 @@ def main():
             mode=args.mode
         )
         
-        # Setup paths
-        paths = manager.setup_paths()
-        
-        # Get files
-        train_files = get_file_paths(paths.train_dir, pattern='*.wav')
-        test_files = get_file_paths(paths.test_dir, pattern='*.wav')
-        logger.info(f"Found {len(train_files)} training files and {len(test_files)} test files")
-        
-        # Train model
-        manager.train_model(train_files)
+        # Train and evaluate model
+        history, results = manager.train_and_evaluate()
         
         logger.info("Training completed successfully")
+        logger.info(f"Final results: {results}")
         
     except Exception as e:
         logger.error(f"Error during training: {str(e)}")

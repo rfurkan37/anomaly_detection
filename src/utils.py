@@ -95,48 +95,19 @@ def fit_score_distribution(scores: np.ndarray) -> Tuple[float, float, float]:
     """Fit a gamma distribution to the scores."""
     return stats.gamma.fit(scores)
 
-def calculate_threshold(self, train_files):
-        """Calculate anomaly threshold more efficiently."""
-        logger.info("Calculating anomaly threshold...")
+def calculate_threshold(score_distribution: Tuple[float, float, float], 
+                    percentile: float = 0.95) -> float:
+    """Calculate anomaly threshold based on score distribution.
+    
+    Args:
+        score_distribution: Tuple of (alpha, loc, beta) parameters from gamma distribution fit
+        percentile: The percentile to use for threshold (default: 0.95)
         
-        # Process files in batches
-        batch_size = 32
-        all_scores = []
-        
-        for i in tqdm(range(0, len(train_files), batch_size), desc="Processing files"):
-            batch_files = train_files[i:i + batch_size]
-            batch_features = []
-            
-            # Extract features in parallel using tf.data
-            dataset = tf.data.Dataset.from_tensor_slices(batch_files)
-            dataset = dataset.map(
-                lambda x: tf.py_function(
-                    self.feature_extractor.extract_features,
-                    [x],
-                    tf.float32
-                ),
-                num_parallel_calls=tf.data.AUTOTUNE
-            )
-            dataset = dataset.prefetch(tf.data.AUTOTUNE)
-            
-            # Convert to numpy and calculate scores
-            batch_features = list(dataset.as_numpy_iterator())
-            batch_features = np.vstack(batch_features)
-            
-            # Calculate scores for batch
-            reconstructed = self.model.predict(
-                batch_features, 
-                batch_size=32,
-                verbose=0
-            )
-            scores = np.mean(np.square(batch_features - reconstructed), axis=1)
-            all_scores.extend(scores)
-        
-        all_scores = np.array(all_scores)
-        self.score_distribution = fit_score_distribution(all_scores)
-        self.threshold = calculate_threshold(self.score_distribution)
-        
-        return all_scores
+    Returns:
+        float: The calculated threshold value
+    """
+    alpha, loc, beta = score_distribution
+    return stats.gamma.ppf(percentile, alpha, loc=loc, scale=beta)
 
 def evaluate_predictions(y_true: np.ndarray,
                        y_score: np.ndarray,

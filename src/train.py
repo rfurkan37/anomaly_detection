@@ -6,6 +6,7 @@ import logging
 from typing import List, Optional, Dict, Tuple
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras.mixed_precision import experimental as mixed_precision
 
 from .config import ModelConfig, TrainingConfig
 from .features import FeatureExtractor
@@ -77,7 +78,6 @@ class Trainer:
             self.feature_extractor,
             self.model_config.batch_size
         )
-        
         # Mixed precision for faster training
         mixed_precision.set_global_policy('mixed_float16')
         
@@ -189,3 +189,48 @@ class Trainer:
         trainer.score_distribution = data['distribution']
         
         return trainer
+    
+    def calculate_threshold(self, train_files):
+        """Calculate anomaly threshold more efficiently."""
+        logger.info("Calculating anomaly threshold...")
+    
+        # Process files in batches
+        batch_size = 32
+        all_scores = []
+    
+        for i in tqdm(range(0, len(train_files), batch_size), desc="Processing files"):
+            batch_files = train_files[i:i + batch_size]
+            batch_features = []
+        
+            # Extract features in parallel using tf.data
+            dataset = tf.data.Dataset.from_tensor_slices(batch_files)
+            dataset = dataset.map(
+                lambda x: tf.py_function(
+                    self.feature_extractor.extract_features,
+                    [x],
+                    tf.float32
+                ),
+                num_parallel_calls=tf.data.AUTOTUNE
+            )
+            dataset = dataset.prefetch(tf.data.AUTOTUNE)
+        
+            # Convert to numpy and calculate scores
+            batch_features = list(dataset.as_numpy_iterator())
+            batch_features = np.vstack(batch_features)
+        
+            # Calculate scores for batch
+            reconstructed = self.model.predict(
+                batch_features, 
+                batch_size=32,
+                verbose=0
+            )
+            scores = np.mean(np.square(batch_features - reconstructed), axis=1)
+            all_scores.extend(scores)
+    
+        all_scores = np.array(all_scores)
+        self.score_distribution = fit_score_distribution(all_scores)
+    
+        # Use the utility function to calculate threshold
+        self.threshold = calculate_threshold(self.score_distribution)
+    
+        return all_scores

@@ -68,3 +68,8 @@ class AnomalyDetector(tf.keras.Model):
             loss='mse',
             metrics=['mae']
         )
+    # Missing implementation in AnomalyDetector class
+    @classmethod
+    def load(cls, path: str):
+        """Load model from path."""
+        return tf.keras.models.load_model(path)
